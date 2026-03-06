@@ -77,29 +77,494 @@ Before writing any Python code, build a solid mental model of what Kafka is and 
 
 ---
 
-## Module 2 — Environment Setup
+## Module 2 — Environment Setup (macOS with Docker)
 
-### 2.1 Installing Kafka Locally
+### 2.1 Prerequisites
 
-- Download and run Apache Kafka (with KRaft mode — no ZooKeeper needed since Kafka 3.3+)
-- Starting the broker, creating your first topic via CLI
-- Using `kafka-console-producer` and `kafka-console-consumer` to verify
+**Step 1: Install Homebrew** (if not already installed)
 
-### 2.2 Docker Compose Setup
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
 
-- Running Kafka with Docker Compose (single broker and multi-broker setups)
-- Adding Schema Registry, Kafka UI, and other tools as containers
-- Example `docker-compose.yml` for a full local development environment
+**Step 2: Install Docker Desktop for macOS**
 
-### 2.3 Managed Kafka Services
 
-- Overview of Confluent Cloud, AWS MSK, Redpanda, Aiven
-- When to use managed vs. self-hosted
+Verify Docker is working:
 
-### 2.4 Python Environment
+```bash
+docker --version
+docker compose version
+```
 
-- Setting up a virtual environment (`venv`, `poetry`, or `uv`)
-- Installing Python Kafka libraries (`confluent-kafka`, `kafka-python`, `aiokafka`)
+---
+
+### 2.2 Single-Broker Kafka Setup with Docker Compose
+
+**Step 1: Create a project directory**
+
+```bash
+mkdir kafka-docker && cd kafka-docker
+```
+
+**Step 2: Create `docker-compose.yml`**
+
+Create a file called `docker-compose.yml` with the following contents:
+
+```yaml
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    user: root
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+```
+
+> **Note:** The `user: root` line is required because the `apache/kafka` image runs as
+> `appuser` (uid 1000) by default, which does not have write permissions to the
+> data directory. Without it, the container will crash with `AccessDeniedException`.
+
+**Step 3: Start Kafka**
+
+```bash
+docker compose up -d
+```
+
+**Step 4: Verify the broker is running**
+
+```bash
+docker compose logs kafka | tail -20
+```
+
+Look for a line containing `Kafka Server started`. You can also check the container status:
+
+```bash
+docker compose ps
+```
+
+The `kafka` container should show `running`.
+
+---
+
+### 2.3 Creating Topics and Testing with CLI (Inside Docker)
+
+Since Kafka CLI tools are inside the container, you run them via `docker exec`.
+
+**Step 1: Create a topic**
+
+```bash
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --create \
+  --topic my-first-topic \
+  --bootstrap-server localhost:9092 \
+  --partitions 3 \
+  --replication-factor 1
+```
+
+**Step 2: List topics**
+
+```bash
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092
+```
+
+**Step 3: Describe the topic**
+
+```bash
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --describe \
+  --topic my-first-topic \
+  --bootstrap-server localhost:9092
+```
+
+**Step 4: Produce messages via CLI**
+
+```bash
+docker exec -it kafka /opt/kafka/bin/kafka-console-producer.sh \
+  --topic my-first-topic \
+  --bootstrap-server localhost:9092
+```
+
+Type messages line by line, pressing Enter after each:
+
+```
+Hello Kafka
+Second message
+Third message
+```
+
+Press `Ctrl+C` to exit the producer.
+
+**Step 5: Consume messages via CLI**
+
+```bash
+docker exec -it kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --topic my-first-topic \
+  --bootstrap-server localhost:9092 \
+  --from-beginning
+```
+
+You should see all three messages. Press `Ctrl+C` to exit.
+
+**Step 6: Test real-time streaming**
+
+Open two terminal windows side by side:
+- **Terminal 1** — run the console producer (Step 4)
+- **Terminal 2** — run the console consumer without `--from-beginning`
+
+Type messages in Terminal 1 and watch them appear instantly in Terminal 2.
+
+---
+
+### 2.4 Adding Kafka UI (Web Dashboard)
+
+Kafka UI gives you a browser-based interface to inspect topics, messages, consumer groups, and brokers.
+
+**Step 1: Update `docker-compose.yml`**
+
+Add the `kafka-ui` service below the existing `kafka` service:
+
+```yaml
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    user: root
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      - kafka
+```
+
+**Step 2: Restart the stack**
+
+```bash
+docker compose up -d
+```
+
+**Step 3: Open Kafka UI**
+
+Open your browser and go to: `http://localhost:8080`
+
+You can now:
+- Browse topics and their messages
+- View partitions and offsets
+- Monitor consumer groups and lag
+- Create new topics from the UI
+
+---
+
+### 2.5 Adding Schema Registry (Optional)
+
+Schema Registry enforces data contracts for your Kafka messages. Add it to your `docker-compose.yml`:
+
+```yaml
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: schema-registry
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    depends_on:
+      - kafka
+```
+
+After adding, run `docker compose up -d`. The Schema Registry API is available at `http://localhost:8081`.
+
+To also connect it to Kafka UI, add this env var to the `kafka-ui` service:
+
+```yaml
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+```
+
+---
+
+### 2.6 Multi-Broker Setup (3 Brokers)
+
+For a more realistic local cluster, use three brokers:
+
+```yaml
+services:
+  kafka-1:
+    image: apache/kafka:latest
+    container_name: kafka-1
+    user: root
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+  kafka-2:
+    image: apache/kafka:latest
+    container_name: kafka-2
+    user: root
+    ports:
+      - "9093:9092"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+  kafka-3:
+    image: apache/kafka:latest
+    container_name: kafka-3
+    user: root
+    ports:
+      - "9094:9092"
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+```
+
+With this setup, you can create topics with `--replication-factor 3` and test broker failure scenarios by stopping individual containers:
+
+```bash
+docker compose stop kafka-2
+```
+
+Your Python clients connect using all three brokers:
+
+```python
+bootstrap_servers = "localhost:9092,localhost:9093,localhost:9094"
+```
+
+---
+
+### 2.7 Python Environment Setup
+
+**Step 1: Create a project directory**
+
+```bash
+mkdir kafka-python-project && cd kafka-python-project
+```
+
+**Step 2: Create a virtual environment**
+
+Using `venv`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Or using `uv` (faster alternative):
+
+```bash
+brew install uv
+uv venv
+source .venv/bin/activate
+```
+
+**Step 3: Install Kafka Python libraries**
+
+```bash
+# confluent-kafka (recommended for production)
+pip install confluent-kafka
+
+# kafka-python (maintained fork — good for learning)
+pip install kafka-python-ng
+
+# aiokafka (for async applications)
+pip install aiokafka
+```
+
+**Step 4: Verify the installation**
+
+```bash
+python3 -c "from confluent_kafka import Producer; print('confluent-kafka OK')"
+python3 -c "from kafka import KafkaProducer; print('kafka-python OK')"
+python3 -c "from aiokafka import AIOKafkaProducer; print('aiokafka OK')"
+```
+
+---
+
+### 2.8 Smoke Test — Produce and Consume from Python
+
+Make sure your Docker Kafka stack is running (`docker compose up -d`), then create `test_kafka.py`:
+
+```python
+from confluent_kafka import Producer, Consumer
+import time
+
+# --- Producer ---
+producer = Producer({"bootstrap.servers": "localhost:9092"})
+
+for i in range(5):
+    producer.produce("my-first-topic", value=f"Message {i}".encode("utf-8"))
+    print(f"Produced: Message {i}")
+
+producer.flush()
+
+# Give the broker a moment
+time.sleep(1)
+
+# --- Consumer ---
+consumer = Consumer({
+    "bootstrap.servers": "localhost:9092",
+    "group.id": "my-test-group",
+    "auto.offset.reset": "earliest",
+})
+
+consumer.subscribe(["my-first-topic"])
+
+print("\nConsuming messages:")
+for _ in range(10):
+    msg = consumer.poll(timeout=2.0)
+    if msg is None:
+        break
+    if msg.error():
+        print(f"Error: {msg.error()}")
+    else:
+        print(f"Received: {msg.value().decode('utf-8')} "
+              f"[partition={msg.partition()}, offset={msg.offset()}]")
+
+consumer.close()
+```
+
+Run it:
+
+```bash
+python3 test_kafka.py
+```
+
+You should see produced messages followed by consumed messages with partition and offset info.
+
+---
+
+### 2.9 Managing Your Docker Kafka Stack
+
+| Task | Command |
+|---|---|
+| Start the stack | `docker compose up -d` |
+| Stop the stack (keep data) | `docker compose stop` |
+| Stop and remove containers | `docker compose down` |
+| Stop and remove everything (including data) | `docker compose down -v` |
+| View logs | `docker compose logs -f kafka` |
+| Check running containers | `docker compose ps` |
+| Restart a single service | `docker compose restart kafka` |
+| Shell into the Kafka container | `docker exec -it kafka bash` |
+
+---
+
+### 2.10 Troubleshooting Common Issues on macOS
+
+**Port 9092 already in use:**
+
+```bash
+lsof -i :9092
+```
+
+Kill the conflicting process or change the port mapping in `docker-compose.yml`.
+
+**Docker Desktop not running:**
+
+If you see `Cannot connect to the Docker daemon`, open Docker Desktop and wait for it to fully start.
+
+**Container exits immediately:**
+
+Check logs for errors:
+
+```bash
+docker compose logs kafka
+```
+
+Common cause: invalid `CLUSTER_ID` or conflicting data in the volume. Fix by removing volumes:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+**Kafka UI not loading:**
+
+The Kafka broker may still be starting. Wait 10-15 seconds and refresh. Check that the `kafka` container is healthy first:
+
+```bash
+docker compose ps
+```
+
+**Apple Silicon (M1/M2/M3) compatibility:**
+
+The `apache/kafka` and `provectuslabs/kafka-ui` images support ARM64 natively. If you encounter issues with other images, add `platform: linux/amd64` to the service in `docker-compose.yml`.
 
 ---
 
