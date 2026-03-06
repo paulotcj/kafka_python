@@ -562,7 +562,7 @@ services:
 
 #### Step-by-step: Running and testing the multi-broker cluster
 
-**Step 1: Stop your single-broker stack (if running)** 
+**Step 1: Stop your single-broker stack (if running)**
 
 If you still have the single-broker setup running from earlier sections, stop it
 first to free up ports:
@@ -604,12 +604,25 @@ Open `http://localhost:8080` in your browser. You should see:
 
 Click on "Brokers" to see all three listed with their IDs (1, 2, 3).
 
+> **Internal vs external bootstrap server for CLI commands:**
+>
+> There are two ways to run CLI commands against the cluster:
+> - **From inside a container** (`docker exec kafka-1 ...`): use the **internal**
+>   listener address `kafka-1:9094`. Inside a container, `localhost` refers to that
+>   container itself, not your Mac. Using `localhost:9092` will cause a warning like
+>   `Connection to node 3 (localhost/127.0.0.1:9096) could not be established` because
+>   the other brokers are not reachable at `localhost` from inside `kafka-1`. The
+>   command may still succeed (the topic gets created), but the warning is misleading.
+> - **From your Mac terminal** (without `docker exec`): use `localhost:9092` as usual.
+>
+> All CLI steps below use `kafka-1:9094` to avoid this warning.
+
 **Step 6: Create a topic with replication**
 
 ```bash
 docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --create \
   --topic replicated-topic \
-  --bootstrap-server localhost:9092 \
+  --bootstrap-server kafka-1:9094 \
   --partitions 3 \
   --replication-factor 3
 ```
@@ -623,7 +636,7 @@ and can continue serving reads and writes.
 ```bash
 docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --describe \
   --topic replicated-topic \
-  --bootstrap-server localhost:9092
+  --bootstrap-server kafka-1:9094
 ```
 
 You should see output like:
@@ -646,7 +659,7 @@ You can also see this in Kafka UI by clicking on "Topics" > "replicated-topic".
 ```bash
 docker exec -it kafka-1 /opt/kafka/bin/kafka-console-producer.sh \
   --topic replicated-topic \
-  --bootstrap-server localhost:9092
+  --bootstrap-server kafka-1:9094
 ```
 
 Type a few messages:
@@ -672,7 +685,7 @@ docker compose stop kafka-2
 ```bash
 docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --describe \
   --topic replicated-topic \
-  --bootstrap-server localhost:9092
+  --bootstrap-server kafka-1:9094
 ```
 
 Compare the output to Step 7. You should see:
@@ -689,7 +702,7 @@ the topic detail page will show the updated ISR.
 ```bash
 docker exec -it kafka-1 /opt/kafka/bin/kafka-console-consumer.sh \
   --topic replicated-topic \
-  --bootstrap-server localhost:9092 \
+  --bootstrap-server kafka-1:9094 \
   --from-beginning
 ```
 
@@ -701,7 +714,7 @@ though a broker is down. Press `Ctrl+C` to exit.
 ```bash
 docker exec -it kafka-1 /opt/kafka/bin/kafka-console-producer.sh \
   --topic replicated-topic \
-  --bootstrap-server localhost:9092
+  --bootstrap-server kafka-1:9094
 ```
 
 ```
@@ -722,7 +735,7 @@ Wait 10 seconds, then describe the topic again:
 ```bash
 docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --describe \
   --topic replicated-topic \
-  --bootstrap-server localhost:9092
+  --bootstrap-server kafka-1:9094
 ```
 
 Broker 2 should reappear in the **Isr** list — it automatically caught up on the
@@ -733,7 +746,7 @@ messages it missed while it was down.
 ```bash
 docker exec -it kafka-2 /opt/kafka/bin/kafka-console-consumer.sh \
   --topic replicated-topic \
-  --bootstrap-server localhost:9095 \
+  --bootstrap-server kafka-2:9094 \
   --from-beginning
 ```
 
