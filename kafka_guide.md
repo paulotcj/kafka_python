@@ -819,51 +819,153 @@ python3 -c "from aiokafka import AIOKafkaProducer; print('aiokafka OK')"
 
 ### 2.8 Smoke Test — Produce and Consume from Python
 
-Make sure your Docker Kafka stack is running (`docker compose up -d`), then create `test_kafka.py`:
+Make sure your Docker Kafka stack is running (`docker compose up -d`) and that the
+topic `my-first-topic` exists (see section 2.3 Step 1). Then create `test_kafka.py`:
+
+#### Understanding bootstrap.servers
+
+Before looking at the code, it is important to understand the `bootstrap.servers`
+setting — it is the first thing every Kafka client needs.
+
+`bootstrap.servers` is the entry point your Python client uses to make its **first**
+connection to the cluster. It does **not** need to list every broker. Here is what
+happens:
+
+1. The client connects to any one broker in the list.
+2. That broker responds with the **full cluster metadata** — the address of every
+   broker, every topic, and which broker is the leader for each partition.
+3. From that point on, the client talks directly to the right broker for each
+   operation. The bootstrap address is no longer used.
+
+For the **multi-broker setup** (section 2.6), the three brokers are mapped to your
+Mac at:
+
+| Broker | Mac address |
+|---|---|
+| kafka-1 | `localhost:9092` |
+| kafka-2 | `localhost:9095` |
+| kafka-3 | `localhost:9096` |
+
+Any single address works as the bootstrap server. However, listing all three is best
+practice — if the first one happens to be down, the client tries the next:
+
+```python
+BOOTSTRAP_SERVERS = "localhost:9092,localhost:9095,localhost:9096"
+```
+
+For the **single-broker setup** (section 2.2), use:
+
+```python
+BOOTSTRAP_SERVERS = "localhost:9092"
+```
+
+> There is no single "leader" broker that clients must connect to. Leadership is a
+> per-partition concept — each partition has one leader broker that handles its reads
+> and writes. The client learns this from the metadata response and routes requests
+> automatically. From the client's perspective, any broker can answer a bootstrap
+> request.
+
+#### The code
 
 ```python
 from confluent_kafka import Producer, Consumer
-import time
 
-# --- Producer ---
-producer = Producer({"bootstrap.servers": "localhost:9092"})
+# Entry point to the Kafka cluster — see explanation above.
+# List all brokers for resilience; the client only needs one to be reachable.
+BOOTSTRAP_SERVERS = "localhost:9092,localhost:9095,localhost:9096"
+
+TOPIC = "my-first-topic"
+
+
+# =============================================================================
+# PRODUCER
+# =============================================================================
+#
+# producer.produce() does NOT immediately send the message to the broker.
+# It places the message into a local in-memory buffer. The client batches
+# messages and sends them in the background for efficiency.
+#
+# producer.flush() blocks until all buffered messages have been delivered to
+# the broker. Always call flush() before your program exits — without it,
+# buffered messages can be silently lost.
+
+producer = Producer({"bootstrap.servers": BOOTSTRAP_SERVERS})
 
 for i in range(5):
-    producer.produce("my-first-topic", value=f"Message {i}".encode("utf-8"))
-    print(f"Produced: Message {i}")
+    producer.produce(
+        TOPIC,
+        value=f"Message {i}".encode("utf-8"),  # Kafka messages are raw bytes
+    )
+    print(f"Buffered: Message {i}")
 
+print("Flushing — waiting for all messages to reach the broker...")
 producer.flush()
+print("All messages delivered.\n")
 
-# Give the broker a moment
-time.sleep(1)
 
-# --- Consumer ---
+# =============================================================================
+# CONSUMER
+# =============================================================================
+#
+# group.id — identifies this consumer as part of a consumer group. Kafka uses
+#   this to track which messages have already been processed (via offsets).
+#   If you run this script twice with the same group.id, the second run will
+#   NOT re-read the messages — Kafka remembers the group already read them.
+#   Change the group.id (e.g. "my-test-group-2") to read from the beginning again.
+#
+# auto.offset.reset — what to do when this group has no committed offset yet
+#   (i.e. the first time this group.id reads this topic):
+#   "earliest" — start from the very first message ever written to the topic.
+#   "latest"   — start from now, only receive messages that arrive after the
+#                consumer starts.
+
 consumer = Consumer({
-    "bootstrap.servers": "localhost:9092",
+    "bootstrap.servers": BOOTSTRAP_SERVERS,
     "group.id": "my-test-group",
     "auto.offset.reset": "earliest",
 })
 
-consumer.subscribe(["my-first-topic"])
+# subscribe() registers interest in a topic and triggers a rebalance — Kafka
+# assigns partitions of the topic to this consumer. The rebalance happens
+# asynchronously, so the first few poll() calls may return None even though
+# messages exist. This is normal, not an error.
+consumer.subscribe([TOPIC])
+print(f"Subscribed to '{TOPIC}'. Waiting for partition assignment...\n")
 
-# After subscribe(), Kafka needs a moment to assign partitions (rebalance).
-# During this time poll() returns None. We only stop when we get 3 consecutive
-# empty polls — meaning there are genuinely no more messages to read.
-print("\nConsuming messages:")
+# poll(timeout) asks the broker for new messages and waits up to `timeout`
+# seconds. It returns a Message object, or None if nothing arrived.
+#
+# None does NOT mean the topic is empty — during the initial rebalance the
+# broker returns None for a brief period. We use empty_polls to wait through
+# the rebalance and only stop after 3 consecutive empty polls, which reliably
+# means all available messages have been read.
 empty_polls = 0
 while empty_polls < 3:
     msg = consumer.poll(timeout=2.0)
+
     if msg is None:
         empty_polls += 1
         continue
-    empty_polls = 0
+
+    empty_polls = 0  # reset — we are actively receiving messages
+
     if msg.error():
         print(f"Error: {msg.error()}")
     else:
-        print(f"Received: {msg.value().decode('utf-8')} "
-              f"[partition={msg.partition()}, offset={msg.offset()}]")
+        # msg.partition() — which partition (0, 1, or 2) this message came from
+        # msg.offset()    — position within that partition (starts at 0,
+        #                   increments by 1 for each message)
+        print(
+            f"Received: {msg.value().decode('utf-8')}"
+            f"  [topic={msg.topic()}"
+            f"  partition={msg.partition()}"
+            f"  offset={msg.offset()}]"
+        )
 
+# Always close the consumer when done. This commits pending offsets and sends
+# a "leave group" signal so Kafka can immediately reassign partitions.
 consumer.close()
+print("\nConsumer closed.")
 ```
 
 Run it:
@@ -872,7 +974,33 @@ Run it:
 python3 test_kafka.py
 ```
 
-You should see produced messages followed by consumed messages with partition and offset info.
+Expected output:
+
+```
+Buffered: Message 0
+Buffered: Message 1
+Buffered: Message 2
+Buffered: Message 3
+Buffered: Message 4
+Flushing — waiting for all messages to reach the broker...
+All messages delivered.
+
+Subscribed to 'my-first-topic'. Waiting for partition assignment...
+
+Received: Message 0  [topic=my-first-topic  partition=1  offset=0]
+Received: Message 1  [topic=my-first-topic  partition=0  offset=0]
+Received: Message 2  [topic=my-first-topic  partition=2  offset=0]
+Received: Message 3  [topic=my-first-topic  partition=1  offset=1]
+Received: Message 4  [topic=my-first-topic  partition=0  offset=1]
+
+Consumer closed.
+```
+
+> The messages will not appear in order (0, 1, 2, 3, 4). Kafka only guarantees order
+> **within a partition**. Since the topic has 3 partitions and no message key is set,
+> messages are distributed across partitions using a round-robin strategy. The
+> consumer reads partitions independently, so the final order depends on which
+> partition the consumer polls first. This is expected and correct behaviour.
 
 ---
 
