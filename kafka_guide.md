@@ -457,7 +457,13 @@ You should also see a "Schema Registry" section in Kafka UI at `http://localhost
 
 ### 2.6 Multi-Broker Setup (3 Brokers)
 
-For a more realistic local cluster, use three brokers:
+For a more realistic local cluster, use three brokers. This is a **completely
+separate `docker-compose.yml`** — not a modification of the single-broker file.
+If you want to try this, stop your current single-broker stack first
+(`docker compose down`), then create a new directory and file for this setup.
+
+Below is the **complete `docker-compose.yml`** with all services included
+(3 brokers, Kafka UI, and Schema Registry):
 
 ```yaml
 services:
@@ -532,23 +538,221 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9094,kafka-2:9094,kafka-3:9094
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+      - schema-registry
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: schema-registry
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka-1:9094,kafka-2:9094,kafka-3:9094
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
     depends_on:
       - kafka-1
       - kafka-2
       - kafka-3
 ```
 
-With this setup, you can create topics with `--replication-factor 3` and test broker failure scenarios by stopping individual containers:
+#### Step-by-step: Running and testing the multi-broker cluster
+
+**Step 1: Stop your single-broker stack (if running)** 
+
+If you still have the single-broker setup running from earlier sections, stop it
+first to free up ports:
+
+```bash
+cd /path/to/your/single-broker-directory
+docker compose down
+```
+
+**Step 2: Create a new directory and file for the multi-broker setup**
+
+```bash
+mkdir kafka-multi-broker && cd kafka-multi-broker
+```
+
+Copy the full `docker-compose.yml` above into this directory.
+
+**Step 3: Start the cluster**
+
+```bash
+docker compose up -d
+```
+
+**Step 4: Verify all containers are running**
+
+```bash
+docker compose ps
+```
+
+You should see 5 containers running: `kafka-1`, `kafka-2`, `kafka-3`, `kafka-ui`,
+and `schema-registry`. Wait 15-20 seconds for all brokers to finish electing a
+controller and forming the cluster.
+
+**Step 5: Open Kafka UI and check the cluster**
+
+Open `http://localhost:8080` in your browser. You should see:
+- **Online: 1 cluster**
+- **Brokers: 3**
+
+Click on "Brokers" to see all three listed with their IDs (1, 2, 3).
+
+**Step 6: Create a topic with replication**
+
+```bash
+docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --create \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9092 \
+  --partitions 3 \
+  --replication-factor 3
+```
+
+The `--replication-factor 3` means each partition's data is copied to all 3 brokers.
+If any single broker goes down, the other two still have a complete copy of the data
+and can continue serving reads and writes.
+
+**Step 7: Verify the topic's replication**
+
+```bash
+docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --describe \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9092
+```
+
+You should see output like:
+
+```
+Topic: replicated-topic  Partition: 0  Leader: 1  Replicas: 1,2,3  Isr: 1,2,3
+Topic: replicated-topic  Partition: 1  Leader: 2  Replicas: 2,3,1  Isr: 2,3,1
+Topic: replicated-topic  Partition: 2  Leader: 3  Replicas: 3,1,2  Isr: 3,1,2
+```
+
+- **Leader** — the broker currently handling reads/writes for that partition
+- **Replicas** — all brokers that hold a copy of that partition
+- **Isr** (In-Sync Replicas) — the brokers whose copies are fully up to date.
+  All 3 should appear here when the cluster is healthy.
+
+You can also see this in Kafka UI by clicking on "Topics" > "replicated-topic".
+
+**Step 8: Produce some test messages**
+
+```bash
+docker exec -it kafka-1 /opt/kafka/bin/kafka-console-producer.sh \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9092
+```
+
+Type a few messages:
+
+```
+Message before broker failure
+Another important message
+Third message for testing
+```
+
+Press `Ctrl+C` to exit.
+
+**Step 9: Simulate a broker failure**
+
+Now kill one of the brokers to see how replication protects your data:
 
 ```bash
 docker compose stop kafka-2
 ```
 
-Your Python clients connect using all three brokers:
+**Step 10: Check what happened to the topic**
+
+```bash
+docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --describe \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9092
+```
+
+Compare the output to Step 7. You should see:
+- **Isr** now lists only 2 brokers instead of 3 (broker 2 is missing)
+- Any partition that had broker 2 as the **Leader** has automatically elected a new
+  leader from the remaining in-sync replicas
+- The cluster is still fully operational
+
+You can also see this in Kafka UI — the "Brokers" page should show 2 online, and
+the topic detail page will show the updated ISR.
+
+**Step 11: Verify your data is still accessible**
+
+```bash
+docker exec -it kafka-1 /opt/kafka/bin/kafka-console-consumer.sh \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9092 \
+  --from-beginning
+```
+
+All three messages you produced in Step 8 should appear — nothing was lost, even
+though a broker is down. Press `Ctrl+C` to exit.
+
+**Step 12: Produce new messages while a broker is down**
+
+```bash
+docker exec -it kafka-1 /opt/kafka/bin/kafka-console-producer.sh \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9092
+```
+
+```
+Message written while broker 2 is down
+```
+
+Press `Ctrl+C`. The cluster continues to accept writes with 2 out of 3 brokers
+(because `KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2`).
+
+**Step 13: Bring the broker back**
+
+```bash
+docker compose start kafka-2
+```
+
+Wait 10 seconds, then describe the topic again:
+
+```bash
+docker exec kafka-1 /opt/kafka/bin/kafka-topics.sh --describe \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9092
+```
+
+Broker 2 should reappear in the **Isr** list — it automatically caught up on the
+messages it missed while it was down.
+
+**Step 14: Verify the recovered broker has all messages**
+
+```bash
+docker exec -it kafka-2 /opt/kafka/bin/kafka-console-consumer.sh \
+  --topic replicated-topic \
+  --bootstrap-server localhost:9095 \
+  --from-beginning
+```
+
+All four messages (3 from before the failure + 1 written during the failure) should
+appear. The broker fully caught up.
+
+#### Connecting from Python
+
+Your Python clients should list all three brokers so they can failover automatically
+if one is unreachable:
 
 ```python
 bootstrap_servers = "localhost:9092,localhost:9095,localhost:9096"
 ```
+
+> **Note:** You only need one reachable broker for the initial connection — Kafka
+> clients automatically discover all other brokers in the cluster. Listing all three
+> is a best practice so the client can still connect even if the first broker in the
+> list happens to be down.
 
 ---
 
