@@ -521,12 +521,32 @@ You should see produced messages followed by consumed messages with partition an
 |---|---|
 | Start the stack | `docker compose up -d` |
 | Stop the stack (keep data) | `docker compose stop` |
-| Stop and remove containers | `docker compose down` |
-| Stop and remove everything (including data) | `docker compose down -v` |
+| Stop and remove containers (keeps data) | `docker compose down` |
+| Stop and remove everything (destroys all data) | `docker compose down -v` |
 | View logs | `docker compose logs -f kafka` |
 | Check running containers | `docker compose ps` |
 | Restart a single service | `docker compose restart kafka` |
 | Shell into the Kafka container | `docker exec -it kafka bash` |
+
+> **Understanding data persistence with Docker Kafka:**
+>
+> Kafka stores all its data (topics, messages, offsets, consumer groups) inside the
+> container's filesystem or in Docker volumes. This means:
+>
+> - `docker compose stop` — pauses containers. All data survives. Use this when you're
+>   done for the day and want to resume later with `docker compose up -d`.
+> - `docker compose down` — removes containers and networks, but **preserves named
+>   volumes**. If your compose file defines a named volume, topic data survives.
+>   However, if no named volume is configured (as in the setup above), data is stored
+>   inside the container and **will be lost**.
+> - `docker compose down -v` — removes containers, networks, **and all volumes**.
+>   This is a full reset: all topics, messages, consumer group offsets, and broker
+>   state are permanently deleted. The next `docker compose up -d` starts a
+>   completely fresh cluster. **Only use this when you intentionally want to wipe
+>   everything and start over.**
+>
+> **Rule of thumb:** Use `docker compose stop` / `docker compose up -d` for daily
+> start/stop. Only use `docker compose down -v` when you want a clean slate.
 
 ---
 
@@ -558,6 +578,11 @@ Common cause: invalid `CLUSTER_ID` or conflicting data in the volume. Fix by rem
 docker compose down -v
 docker compose up -d
 ```
+
+> **Warning:** `docker compose down -v` destroys all Kafka data — topics, messages,
+> consumer group offsets, everything. Only use this as a last resort when the broker
+> won't start. If you have data you care about, try `docker compose down` (without
+> `-v`) followed by `docker compose up -d` first.
 
 **Kafka UI not loading:**
 
