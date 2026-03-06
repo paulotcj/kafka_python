@@ -122,10 +122,11 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9094,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9094,EXTERNAL://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -134,9 +135,9 @@ services:
       CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
 ```
 
-> **Note:** The `user: root` line is required because the `apache/kafka` image runs as
-> `appuser` (uid 1000) by default, which does not have write permissions to the
-> data directory. Without it, the container will crash with `AccessDeniedException`.
+> **Notes:**
+> - `user: root` is required because the `apache/kafka` image runs as `appuser` (uid 1000) by default, which does not have write permissions to the data directory. Without it, the container will crash with `AccessDeniedException`.
+> - Two listeners are configured: `INTERNAL://kafka:9094` for container-to-container communication (e.g. Kafka UI, Schema Registry) and `EXTERNAL://localhost:9092` for access from your Mac (Python scripts, CLI tools). Without this split, other Docker containers would try to reach Kafka at `localhost:9092`, which inside a container points to themselves — not the Kafka broker.
 
 **Step 3: Start Kafka**
 
@@ -246,10 +247,11 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9094,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9094,EXTERNAL://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -264,7 +266,7 @@ services:
       - "8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9094
     depends_on:
       - kafka
 ```
@@ -299,7 +301,7 @@ Schema Registry enforces data contracts for your Kafka messages. Add it to your 
       - "8081:8081"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9094
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
     depends_on:
       - kafka
@@ -330,10 +332,11 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9094,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-1:9094,EXTERNAL://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
@@ -346,14 +349,15 @@ services:
     container_name: kafka-2
     user: root
     ports:
-      - "9093:9092"
+      - "9095:9092"
     environment:
       KAFKA_NODE_ID: 2
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9093
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9094,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:9094,EXTERNAL://localhost:9095
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
@@ -366,14 +370,15 @@ services:
     container_name: kafka-3
     user: root
     ports:
-      - "9094:9092"
+      - "9096:9092"
     environment:
       KAFKA_NODE_ID: 3
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9094
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9094,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:9094,EXTERNAL://localhost:9096
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
@@ -388,7 +393,7 @@ services:
       - "8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9094,kafka-2:9094,kafka-3:9094
     depends_on:
       - kafka-1
       - kafka-2
@@ -404,7 +409,7 @@ docker compose stop kafka-2
 Your Python clients connect using all three brokers:
 
 ```python
-bootstrap_servers = "localhost:9092,localhost:9093,localhost:9094"
+bootstrap_servers = "localhost:9092,localhost:9095,localhost:9096"
 ```
 
 ---
