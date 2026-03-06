@@ -846,11 +846,17 @@ consumer = Consumer({
 
 consumer.subscribe(["my-first-topic"])
 
+# After subscribe(), Kafka needs a moment to assign partitions (rebalance).
+# During this time poll() returns None. We only stop when we get 3 consecutive
+# empty polls — meaning there are genuinely no more messages to read.
 print("\nConsuming messages:")
-for _ in range(10):
+empty_polls = 0
+while empty_polls < 3:
     msg = consumer.poll(timeout=2.0)
     if msg is None:
-        break
+        empty_polls += 1
+        continue
+    empty_polls = 0
     if msg.error():
         print(f"Error: {msg.error()}")
     else:
