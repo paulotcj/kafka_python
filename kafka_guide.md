@@ -291,7 +291,102 @@ You can now:
 
 ### 2.5 Adding Schema Registry (Optional)
 
-Schema Registry enforces data contracts for your Kafka messages. Add it to your `docker-compose.yml`:
+#### What Is Schema Registry and Why Do You Need It?
+
+When producers send messages to Kafka, they are just bytes — Kafka itself does not
+know or care about the structure of your data. This creates a problem: if a producer
+changes the message format (e.g., renames a field, removes a field, changes a type),
+consumers that depend on the old format will break.
+
+**Schema Registry** solves this by acting as a central authority for message formats.
+It stores versioned schemas (Avro, Protobuf, or JSON Schema) and enforces
+compatibility rules so that producers and consumers can evolve independently without
+breaking each other.
+
+**How it works:**
+
+1. A producer registers a schema (e.g., "a User has fields: name, email, age") with
+   Schema Registry before sending messages.
+2. Schema Registry assigns the schema an ID and stores it.
+3. The producer embeds the schema ID in each message (just a few extra bytes), then
+   sends the message to Kafka.
+4. When a consumer reads the message, it uses the schema ID to fetch the schema from
+   Schema Registry and deserialize the data correctly.
+5. If a producer tries to register a new version of the schema that would break
+   existing consumers (e.g., removing a required field), Schema Registry **rejects
+   it** based on the configured compatibility rules.
+
+**Without Schema Registry:**
+
+```python
+# Producer sends a dict as JSON — no contract, no validation
+producer.produce("users", value=json.dumps({"name": "Alice", "age": 30}).encode())
+
+# Later, producer changes the format — removes "age", adds "email"
+producer.produce("users", value=json.dumps({"name": "Bob", "email": "bob@example.com"}).encode())
+
+# Consumer expects "age" field — breaks at runtime with a KeyError
+user = json.loads(msg.value())
+print(user["age"])  # KeyError!
+```
+
+**With Schema Registry:**
+
+```python
+# Schema is defined and registered — all messages must conform to it
+schema_str = """
+{
+  "type": "record",
+  "name": "User",
+  "fields": [
+    {"name": "name", "type": "string"},
+    {"name": "email", "type": "string"},
+    {"name": "age", "type": "int"}
+  ]
+}
+"""
+
+# If a producer tries to send a message missing "age", serialization fails
+# immediately — the bad data never reaches Kafka
+# If a producer tries to register a new schema that removes "age" without
+# a default value, Schema Registry rejects it before any messages are sent
+```
+
+**When you don't need it:** For learning, prototyping, or simple projects where you
+control both producer and consumer code. JSON serialization is fine for these cases.
+
+**When you do need it:** In production with multiple teams or services writing to and
+reading from the same topics. Schema Registry prevents one team's changes from
+silently breaking another team's consumers.
+
+#### The Schema Registry REST API
+
+Schema Registry exposes a REST API at `http://localhost:8081`. When you visit it in
+your browser and see `{}`, that is the expected response — it means the server is
+running but you have not registered any schemas yet. Here are some useful endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `GET http://localhost:8081/subjects` | List all registered subjects (schemas). Returns `[]` when empty. |
+| `GET http://localhost:8081/subjects/<name>/versions` | List all versions of a schema |
+| `GET http://localhost:8081/schemas/ids/<id>` | Get a schema by its numeric ID |
+| `GET http://localhost:8081/config` | View the global compatibility setting |
+
+Try it now:
+
+```bash
+curl http://localhost:8081/subjects
+```
+
+This will return `[]` — an empty list, because no schemas have been registered yet.
+Schemas get registered automatically when you use a schema-aware serializer (covered
+in Module 7 and Module 12), or you can register them manually via the API.
+
+#### Setup Steps
+
+**Step 1: Add the `schema-registry` service to your `docker-compose.yml`**
+
+Paste this block at the bottom of your `services:` section (at the same indentation level as `kafka` and `kafka-ui`):
 
 ```yaml
   schema-registry:
@@ -307,13 +402,56 @@ Schema Registry enforces data contracts for your Kafka messages. Add it to your 
       - kafka
 ```
 
-After adding, run `docker compose up -d`. The Schema Registry API is available at `http://localhost:8081`.
+**Step 2: Connect Schema Registry to Kafka UI**
 
-To also connect it to Kafka UI, add this env var to the `kafka-ui` service:
+In your `kafka-ui` service, add the `KAFKA_CLUSTERS_0_SCHEMAREGISTRY` line **inside the `environment:` block** and add `schema-registry` to `depends_on`. The full `kafka-ui` service should look like this:
 
 ```yaml
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9094
       KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+    depends_on:
+      - kafka
+      - schema-registry
 ```
+
+> **Important:** The `KAFKA_CLUSTERS_0_SCHEMAREGISTRY` line must be indented under
+> `environment:`, not placed at the service level. Placing it outside `environment:`
+> causes a Docker Compose validation error:
+> `additional properties 'KAFKA_CLUSTERS_0_SCHEMAREGISTRY' not allowed`.
+
+**Step 3: Start the updated stack**
+
+```bash
+docker compose up -d
+```
+
+**Step 4: Verify Schema Registry is running**
+
+```bash
+docker compose ps
+```
+
+All three containers (`kafka`, `kafka-ui`, `schema-registry`) should show as running.
+
+**Step 5: Verify Schema Registry is responding**
+
+```bash
+curl http://localhost:8081/subjects
+```
+
+This should return `[]` (empty list — no schemas registered yet). If you visit
+`http://localhost:8081` in your browser, you will see `{}` — this is normal and means
+the server is running. Schemas will appear here once you start using schema-aware
+serializers (covered in Module 7 and Module 12).
+
+You should also see a "Schema Registry" section in Kafka UI at `http://localhost:8080`.
 
 ---
 
