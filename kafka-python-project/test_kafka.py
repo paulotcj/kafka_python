@@ -82,7 +82,8 @@ print("=========================================================================
 print("PRODUCER")
 print("=============================================================================")
 
-producer = kafka_producer({"bootstrap.servers": BOOTSTRAP_SERVERS})
+config_param : dict[str,str] = {"bootstrap.servers": BOOTSTRAP_SERVERS}
+producer = kafka_producer(config_param)
 
 for i in range(5):
     producer.produce(
@@ -129,13 +130,13 @@ print("=========================================================================
 print("CONSUMER")
 print("=============================================================================")
 
-consumer = kafka_consumer(
-    {
+
+consumer_config_dict : dict[str,str] =     {
         "bootstrap.servers" : BOOTSTRAP_SERVERS,
         "group.id"          : "my-test-group", # arbitrary string to define my consumer group, read comments above
         "auto.offset.reset" : "earliest",
     }
-)
+consumer = kafka_consumer(consumer_config_dict)
 
 # subscribe() tells the consumer which topics to read from.
 # This triggers a "rebalance" — Kafka assigns partitions of the topic to this
